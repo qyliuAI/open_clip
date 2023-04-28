@@ -36,6 +36,14 @@ from training.scheduler import cosine_lr, const_lr, const_lr_cooldown
 from training.train import train_one_epoch, evaluate
 from training.file_utils import pt_load, check_exists, start_sync_process, remote_sync
 
+import torch_npu
+import apex
+from apex import amp
+
+from torch_npu.contrib import transfer_to_npu
+print("Set jit compile False")
+torch_npu.npu.set_compile_mode(jit_compile=False)
+
 
 LATEST_CHECKPOINT_NAME = "epoch_latest.pt"
 
@@ -280,19 +288,6 @@ def main(args):
                 val = getattr(args, name)
                 logging.info(f"  {name}: {val}")
                 f.write(f"{name}: {val}\n")
-
-    if args.distributed and not args.horovod:
-        if args.use_bn_sync:
-            model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-        ddp_args = {}
-        if args.ddp_static_graph:
-            # this doesn't exist in older PyTorch, arg only added if enabled
-            ddp_args['static_graph'] = True
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device], **ddp_args)
-    
-        if args.distill:
-            dist_model = torch.nn.parallel.DistributedDataParallel(dist_model, device_ids=[device], **ddp_args)
-
     # create optimizer and scaler
     optimizer = None
     scaler = None
@@ -322,6 +317,21 @@ def main(args):
             hvd.broadcast_optimizer_state(optimizer, root_rank=0)
 
         scaler = GradScaler() if args.precision == "amp" else None
+        model, optimizer = apex.amp.initialize(model, optimizer, opt_level='O2', combine_grad=True)
+
+
+    if args.distributed and not args.horovod:
+        if args.use_bn_sync:
+            model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        ddp_args = {}
+        if args.ddp_static_graph:
+            # this doesn't exist in older PyTorch, arg only added if enabled
+            ddp_args['static_graph'] = True
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[device], **ddp_args)
+    
+        if args.distill:
+            dist_model = torch.nn.parallel.DistributedDataParallel(dist_model, device_ids=[device], **ddp_args)
+
 
     # optionally resume from a checkpoint
     start_epoch = 0

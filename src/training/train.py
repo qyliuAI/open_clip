@@ -8,6 +8,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from torch.nn.parallel.distributed import DistributedDataParallel
+from apex import amp
+import torch_npu
+
 
 try:
     import wandb
@@ -52,11 +55,9 @@ def unwrap_model(model):
         return model
 
 
-def backward(total_loss, scaler):
-    if scaler is not None:
-        scaler.scale(total_loss).backward()
-    else:
-        total_loss.backward()
+def backward(total_loss, scaler, optimizer):
+    with amp.scale_loss(total_loss, optimizer) as scaled_loss:     
+        scaled_loss.backward() 
 
 
 def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist_model, args, tb_writer=None):
@@ -81,6 +82,8 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
+    iter_num = 0
+    total_fps = 0
     for i, batch in enumerate(dataloader):
         i_accum = i // args.accum_freq
         step = num_batches_per_epoch * epoch + i_accum
@@ -108,7 +111,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                 total_loss = sum(losses.values())
                 losses["loss"] = total_loss
 
-            backward(total_loss, scaler)
+            backward(total_loss, scaler, optimizer)
         else:
             # First, cache the features without any gradient tracking.
             with torch.no_grad():
@@ -147,7 +150,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                     del inputs
                     total_loss = sum(losses.values())
                     losses["loss"] = total_loss
-                backward(total_loss, scaler)
+                backward(total_loss, scaler, optimizer)
 
         if scaler is not None:
             if args.horovod:
@@ -230,13 +233,20 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             # resetting batch / data time meters per log window
             batch_time_m.reset()
             data_time_m.reset()
+
+            iter_num += 1
+            total_fps += samples_per_second
+            avg_fps = total_fps/iter_num
+        
+    if is_master(args):
+        avg_fps = total_fps/iter_num
+        logging.info(f"Epoch Avg FPS: {avg_fps:.3f}/s")
+        
     # end for
 
 
 def evaluate(model, data, epoch, args, tb_writer=None):
     metrics = {}
-    if not is_master(args):
-        return metrics
     device = torch.device(args.device)
     model.eval()
 
@@ -312,24 +322,25 @@ def evaluate(model, data, epoch, args, tb_writer=None):
     if not metrics:
         return metrics
 
-    logging.info(
-        f"Eval Epoch: {epoch} "
-        + "\t".join([f"{k}: {round(v, 4):.4f}" for k, v in metrics.items()])
-    )
+    if is_master(args):
+        logging.info(
+            f"Eval Epoch: {epoch} "
+            + "\t".join([f"{k}: {round(v, 4):.4f}" for k, v in metrics.items()])
+        )
 
-    if args.save_logs:
-        for name, val in metrics.items():
-            if tb_writer is not None:
-                tb_writer.add_scalar(f"val/{name}", val, epoch)
+        if args.save_logs:
+            for name, val in metrics.items():
+                if tb_writer is not None:
+                    tb_writer.add_scalar(f"val/{name}", val, epoch)
 
-        with open(os.path.join(args.checkpoint_path, "results.jsonl"), "a+") as f:
-            f.write(json.dumps(metrics))
-            f.write("\n")
+            with open(os.path.join(args.checkpoint_path, "results.jsonl"), "a+") as f:
+                f.write(json.dumps(metrics))
+                f.write("\n")
 
-    if args.wandb:
-        assert wandb is not None, 'Please install wandb.'
-        for name, val in metrics.items():
-            wandb.log({f"val/{name}": val, 'epoch': epoch})
+        if args.wandb:
+            assert wandb is not None, 'Please install wandb.'
+            for name, val in metrics.items():
+                wandb.log({f"val/{name}": val, 'epoch': epoch})
 
     return metrics
 
