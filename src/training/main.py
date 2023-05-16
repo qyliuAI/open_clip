@@ -11,6 +11,10 @@ import numpy as np
 import torch
 from torch import optim
 from torch.cuda.amp import GradScaler
+import torch_npu
+import apex
+from torch_npu.contrib import transfer_to_npu
+
 
 try:
     import wandb
@@ -36,11 +40,6 @@ from training.scheduler import cosine_lr, const_lr, const_lr_cooldown
 from training.train import train_one_epoch, evaluate
 from training.file_utils import pt_load, check_exists, start_sync_process, remote_sync
 
-import torch_npu
-import apex
-from apex import amp
-
-from torch_npu.contrib import transfer_to_npu
 print("Set jit compile False")
 torch_npu.npu.set_compile_mode(jit_compile=False)
 
@@ -302,7 +301,7 @@ def main(args):
         gain_or_bias_params = [p for n, p in named_parameters if exclude(n, p) and p.requires_grad]
         rest_params = [p for n, p in named_parameters if include(n, p) and p.requires_grad]
 
-        optimizer = optim.AdamW(
+        optimizer =apex.optimizers.NpuFusedAdamW(
             [
                 {"params": gain_or_bias_params, "weight_decay": 0.},
                 {"params": rest_params, "weight_decay": args.wd},
