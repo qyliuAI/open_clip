@@ -116,19 +116,9 @@ open_clip是由OpenAI开源的文图匹配预训练模型，通过在LAION-400M�
    
    ```
    公共参数：
-   --device                             //训练使用的设备
-   --gpu-id                             //训练卡id指定
-   --seed                               //随机数种子设置
-   --world-size                         //分布式训练节点数
-   --amp                                //设置是否使用混合精度训练
-   --momentum                           //动量
-   --weight-decay                       //权重衰减
-   --batch-size                         //训练批次大小
-   --lr                                 //初始学习率
-   --epochs                             //重复周期数
-   --data                               //数据集路径
-   --print-freq                         //日志打印频率
-   --addr                               //主机地址
+   --device_id                             //训练卡id指定
+   --data_path                             //数据路径
+   --pretrain_model                        //预训练模型路径
    ```
    
    训练完成后，权重文件保存在当前路径下，并输出模型训练精度和性能信息。
