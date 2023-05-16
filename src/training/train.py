@@ -9,7 +9,6 @@ import torch
 import torch.nn.functional as F
 from torch.nn.parallel.distributed import DistributedDataParallel
 from apex import amp
-import torch_npu
 
 
 try:
@@ -82,8 +81,6 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
-    iter_num = 0
-    total_fps = 0
     for i, batch in enumerate(dataloader):
         i_accum = i // args.accum_freq
         step = num_batches_per_epoch * epoch + i_accum
@@ -205,8 +202,8 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             samples_per_second_per_gpu = args.accum_freq * args.batch_size / batch_time_m.val
             logging.info(
                 f"Train Epoch: {epoch} [{num_samples:>{sample_digits}}/{samples_per_epoch} ({percent_complete:.0f}%)] "
-                f"Data (t): {data_time_m.avg:.3f} "
-                f"Batch (t): {batch_time_m.avg:.3f}, {samples_per_second:#g}/s, {samples_per_second_per_gpu:#g}/s/gpu "
+                f"Data_time: {data_time_m.avg:.3f} "
+                f"Time: {batch_time_m.avg:.3f}, {samples_per_second:#g}/s, {samples_per_second_per_gpu:#g}/s/gpu "
                 f"LR: {optimizer.param_groups[0]['lr']:5f} "
                 f"Logit Scale: {logit_scale_scalar:.3f} " + loss_log
             )
@@ -233,14 +230,6 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             # resetting batch / data time meters per log window
             batch_time_m.reset()
             data_time_m.reset()
-
-            iter_num += 1
-            total_fps += samples_per_second
-            avg_fps = total_fps/iter_num
-        
-    if is_master(args):
-        avg_fps = total_fps/iter_num
-        logging.info(f"Epoch Avg FPS: {avg_fps:.3f}/s")
         
     # end for
 
